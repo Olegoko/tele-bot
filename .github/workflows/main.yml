@@ -2,7 +2,7 @@ name: Weather Bot Kolomna Channel
 
 on:
   schedule:
-    - cron: '0 7 * * *'   # 10:00 MSK = 07:00 UTC
+    - cron: '0 9 * * *'   # 10:00 MSK = 07:00 UTC
   workflow_dispatch:
 
 jobs:
