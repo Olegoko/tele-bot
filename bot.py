@@ -4,6 +4,7 @@ import signal
 import logging
 import requests
 import telebot
+from datetime import datetime, timedelta
 
 logging.basicConfig(level=logging.INFO)
 
@@ -16,42 +17,72 @@ if not TELEGRAM_TOKEN or not OPENWEATHER_API_KEY or not CHANNEL_ID:
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
+# Коломна
 LAT = 55.0794
 LON = 38.7783
 
 
-def get_weather():
-    url = "https://api.openweathermap.org/data/2.5/weather"
+def get_tomorrow_forecast():
+    """Запрашивает прогноз на завтра у OpenWeatherMap."""
+    # ИСПОЛЬЗУЕМ ЭНДПОИНТ ПРОГНОЗА (5 дней / 3 часа)
+    url = "https://api.openweathermap.org/data/2.5/forecast"
     params = {
         "lat": LAT,
         "lon": LON,
         "appid": OPENWEATHER_API_KEY,
         "units": "metric",
         "lang": "ru",
+        "cnt": 16  # 16 * 3 = 48 часов, чтобы точно захватить весь завтрашний день
     }
     try:
         r = requests.get(url, params=params, timeout=10)
         r.raise_for_status()
-        d = r.json()
-        temp = d["main"]["temp"]
-        feels = d["main"]["feels_like"]
-        hum = d["main"]["humidity"]
-        wind = d["wind"]["speed"]
-        desc = d["weather"][0]["description"].capitalize()
+        data = r.json()
+
+        # Определяем дату на "завтра"
+        tomorrow = datetime.now() + timedelta(days=1)
+        tomorrow_date = tomorrow.date()
+
+        # Собираем все прогнозы, относящиеся к завтрашнему дню
+        tomorrow_items = []
+        for item in data.get("list", []):
+            item_dt = datetime.fromtimestamp(item["dt"])
+            if item_dt.date() == tomorrow_date:
+                tomorrow_items.append(item)
+
+        if not tomorrow_items:
+            return None
+
+        # Извлекаем температуры (день/ночь) и описания
+        temps = [item["main"]["temp"] for item in tomorrow_items]
+        day_temp = max(temps)
+        night_temp = min(temps)
+        # Берём описание из самого "дневного" прогноза (около 12:00)
+        # или просто первое доступное
+        descriptions = [item["weather"][0]["description"] for item in tomorrow_items]
+        # Для простоты берём самое частое описание или первое
+        desc = descriptions[len(descriptions)//2] if descriptions else "неизвестно"
+
+        # Ветер и влажность (берём из дневного прогноза)
+        wind = tomorrow_items[len(tomorrow_items)//2]["wind"]["speed"]
+        humidity = tomorrow_items[len(tomorrow_items)//2]["main"]["humidity"]
+
         return (
-            f"🌤️ Погода в Коломне:\n"
-            f"Сейчас: {temp:.0f}°C (ощущается как {feels:.0f}°C), {desc}\n"
-            f"Ветер: {wind} м/с, влажность: {hum}%"
+            f"🌤️ Погода в Коломне на завтра ({tomorrow_date.strftime('%d.%m')}):\n"
+            f"Днём: {day_temp:.0f}°C, ночью: {night_temp:.0f}°C\n"
+            f"Ожидается: {desc.capitalize()}\n"
+            f"Ветер: {wind} м/с, влажность: {humidity}%"
         )
     except Exception as e:
-        logging.error(f"Ошибка запроса погоды: {e}")
+        logging.error(f"Ошибка запроса прогноза: {e}")
         return None
 
 
 def send_to_channel():
-    text = get_weather()
+    """Публикует прогноз в канал."""
+    text = get_tomorrow_forecast()
     if not text:
-        logging.error("Не удалось получить погоду, отправка отменена.")
+        logging.error("Не удалось получить прогноз, отправка отменена.")
         return
     try:
         bot.send_message(CHANNEL_ID, text)
@@ -64,14 +95,15 @@ def send_to_channel():
 def cmd_start(message):
     bot.reply_to(
         message,
-        "Привет! Я публикую прогноз погоды по Коломне каждый день в 10:00 "
+        "Привет! Я публикую прогноз погоды по Коломне на завтра каждый день в 10:00 "
         "в канале. Подпишитесь на канал, чтобы получать прогноз."
     )
 
 
+# Отправляем прогноз сразу при запуске
 send_to_channel()
 
-
+# Даём боту 5 минут на ответы на /start, затем корректно завершаемся
 def _shutdown(signum, frame):
     logging.info("Время истекло, завершаем бота.")
     try:
